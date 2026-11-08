@@ -161,5 +161,11 @@ The complete version of the experiment in section 9 (`patches/header-timing`):
 
 On the TV: a mid-video quality switch in La thune logged a second, different SPS rewritten
 (`SPS timing 1/3050 -> 1/2000000`) with no new decoder, and playback held at 24–25 fps. Every
-hardware-render start entered guess mode and set `in = 25000, out = 50000` for 25 fps videos, the
-video plane at 50 Hz. DIP-mode starts (placeholder) log `out = 0`.
+hardware-render start entered guess mode.
+
+Limitation found right after: guess mode's estimate depends on when it runs. Decoders started while
+the display was still at 60 Hz (after Home and back, or reopening a video from the menu) often logged
+`in = 15000, out = 60000` and stuttered with every frame decoded; started at 50 Hz they logged
+`in = 25000, out = 50000` and played evenly. A quality switch makes it estimate again, sometimes to
+`in = 60000, out = 60000`. Android switches the display to 50 Hz for 25 fps video in DIP mode too, so
+placeholder-first gets the same even pacing without depending on the estimate.

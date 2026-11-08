@@ -187,9 +187,9 @@ Details that keep it safe:
 
 Tested on 12 H.264 clips (baseline to high profile, 352×288 to 1920×1080, Spotify's own timing values): same size, identical decoded frames, new timing in place. On the TV it held through skips, autoplay and a mid-video quality switch, with the decoder rewriting the new header (`SPS timing 1/3050 -> 1/2000000`) and no new decoder.
 
-It also paces better than the other fixes. In hardware-render mode the decoder drives the video plane at a matching refresh (`in = 25000, out = 50000`: 25 fps shown at 50 Hz, every frame held exactly two refreshes). In DIP mode the log shows `out = 0`, so a 25 fps video is shown on a 60 Hz path and frames alternate between two and three refreshes.
+**Known limitation:** this fix depends on the decoder's own frame-rate estimate (guess mode), and that estimate isn't reliable. When a decoder starts while the TV is still at 60 Hz, for example right after coming back from the Home screen, it often settles on `in = 15000, out = 60000` instead of `in = 25000, out = 50000`. The video then stutters even though every frame is decoded, until a new decoder or a quality switch makes it estimate again. Placeholder-first never uses that estimate, so it doesn't have this problem.
 
-Run it with `./repatch.sh <tv-ip> --header-timing`. It's newer than placeholder-first, which stays the default until it has had more hours on real use.
+Run it with `./repatch.sh <tv-ip> --header-timing`. Placeholder-first stays the default.
 
 ### ❌ What didn't work
 
