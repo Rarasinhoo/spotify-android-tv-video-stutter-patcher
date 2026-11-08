@@ -51,7 +51,7 @@ echo "Spotify $VER on $TV"
 
 mkdir -p "$W/orig"
 for p in $($A shell pm path com.spotify.tv.android | tr -d '\r' | sed 's/package://'); do
-  $A pull "$p" "$W/orig/" >/dev/null
+  $A pull "$p" "$W/orig/" >/dev/null 2>&1
 done
 CERT=$("$BT/apksigner" verify --print-certs "$W/orig/base.apk" | grep -m1 'SHA-256' | awk '{print $NF}')
 [ "$CERT" = "$SPOTIFY_CERT_SHA256" ] || {
