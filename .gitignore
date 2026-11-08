@@ -1,0 +1,7 @@
+local/
+*.apk
+*.apks
+*.keystore
+*.keystore.pass
+*.idsig
+.DS_Store

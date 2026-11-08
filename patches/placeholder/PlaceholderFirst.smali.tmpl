@@ -1,0 +1,63 @@
+.class public final LPlaceholderFirst;
+.super Ljava/lang/Object;
+
+# TCL/MStar decoders pick a broken "hardware render" mode when configured directly on a
+# SurfaceView that is on screen (consumer usage 0x900). Configured on Media3's placeholder
+# surface (a SurfaceTexture, usage 0x100) they pick the working DIP mode and keep it after
+# setOutputSurface. So: configure every video decoder on the placeholder, then move it to
+# the real surface right before the first frame is rendered.
+
+.method public static codecSurface(@CLS@@CI@)Landroid/view/Surface;
+    .locals 3
+
+    iget-object v0, p0, @CLS@->@SURF@:Landroid/view/Surface;
+    if-eqz v0, :plain
+    iget-object v1, p0, @CLS@->@SINK@:@SINKT@
+    if-nez v1, :plain
+    invoke-virtual {v0}, Landroid/view/Surface;->isValid()Z
+    move-result v1
+    if-eqz v1, :plain
+    invoke-virtual {p0, p1}, @CLS@->@Y0@(@CI@)Z
+    move-result v1
+    if-eqz v1, :plain
+
+    const/4 v1, 0x0
+    iput-object v1, p0, @CLS@->@SURF@:Landroid/view/Surface;
+    invoke-virtual {p0, p1}, @CLS@->@R0@(@CI@)Landroid/view/Surface;
+    move-result-object v2
+    iput-object v0, p0, @CLS@->@SURF@:Landroid/view/Surface;
+    const/4 v1, 0x1
+    iput-boolean v1, p0, @CLS@->phPending:Z
+    const-string v0, "PlaceholderFirst"
+    const-string v1, "decoder configured on placeholder surface"
+    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+    return-object v2
+
+    :plain
+    const/4 v1, 0x0
+    iput-boolean v1, p0, @CLS@->phPending:Z
+    invoke-virtual {p0, p1}, @CLS@->@R0@(@CI@)Landroid/view/Surface;
+    move-result-object v2
+    return-object v2
+.end method
+
+.method public static beforeRender(@CLS@@ADP@)V
+    .locals 3
+
+    iget-boolean v0, p0, @CLS@->phPending:Z
+    if-eqz v0, :out
+    const/4 v0, 0x0
+    iput-boolean v0, p0, @CLS@->phPending:Z
+    iget-object v0, p0, @CLS@->@SURF@:Landroid/view/Surface;
+    if-eqz v0, :out
+    invoke-virtual {v0}, Landroid/view/Surface;->isValid()Z
+    move-result v1
+    if-eqz v1, :out
+    invoke-interface {p1, v0}, @ADP@->@SETSURF@(Landroid/view/Surface;)V
+    const-string v1, "PlaceholderFirst"
+    const-string v2, "moved decoder to the real surface"
+    invoke-static {v1, v2}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+
+    :out
+    return-void
+.end method
