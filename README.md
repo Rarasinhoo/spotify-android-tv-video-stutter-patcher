@@ -200,6 +200,12 @@ Spotify's TV app stretches every music video to fill the screen. Its video view 
 1. Every place that picks `ASPECT_FILL` picks `ASPECT_FIT` instead, so the `SurfaceView` takes the video's own shape, centred, with black bars where the shapes differ.
 2. The width Spotify gives the view is multiplied by Media3's pixel aspect ratio, so anamorphic streams come out right too. Spotify passes the raw decoded width and ignores that ratio.
 
+Indochine's *College Boy* (1132×1080, almost square) on the same TV, before and after:
+
+| Stock Spotify: 1.70× too wide | With the aspect fix |
+|---|---|
+| ![College Boy stretched](docs/aspect/college-boy-before.jpg) | ![College Boy at its own aspect ratio](docs/aspect/college-boy-after.jpg) |
+
 On the TV, *Housewife*'s video layer went from `displayFrame 0,0–1920,1080` for a 1590×1080 source to `165,0–1755,1080`. A 16:9 video still fills the screen. Skips stayed at 24 fps in DIP mode.
 
 ### ❌ What didn't work
