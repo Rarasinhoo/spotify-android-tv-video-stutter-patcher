@@ -63,7 +63,7 @@ H.264 streams can declare their frame rate in the sequence header (VUI `timing_i
 | Spotify stream | `num_units_in_tick` / `time_scale` | Declared rate |
 |---|---|---|
 | 1552×1080, 1568×1088, 1056×720 | 1 / 2,000,000 | ~1,000,000 fps |
-| 1280×720 | 1 / 3,050 | ~1,525 fps |
+| 1280×720 and the Angèle videos (Jalousie, Tout oublier, La thune, Balance ton quoi) | 1 / 3,050 | ~1,525 fps |
 
 Normal players ignore this field, because the real timing comes from the container.
 
@@ -121,6 +121,22 @@ Google's demo app (Media3 1.11.0, the same version Spotify ships) on the same TV
 
 Ruled out on the way, all smooth in the demo: audio sync, 1080p, 25 fps, 60↔50 Hz refresh switches at any time, a new `SurfaceView` per video, heavy reference-frame encodes, Media3 1.11 vs 1.12.
 
+### Proved in Spotify itself (A/B)
+
+A test build of Spotify kept the original, buggy setup and added one switch: rewrite the header timing to `1 / 2,000,000`, a value the decoder rejects as absurd (it then measures the rate from timestamps), or leave it alone. Same TV, same videos, back to back:
+
+| Video | Rewrite | Header timing reaching the decoder | Decoder's rate | Decode rate |
+|---|---|---|---|---|
+| Jalousie | off | 1 / 3,050 | `in = 1000, out = 0` | **1–5 fps** |
+| Tout oublier | off | 1 / 3,050 | same | **stalled** |
+| La thune | on | 1 / 2,000,000 | `in = 25000, out = 50000` | 23–25 fps |
+| La thune, after a mid-video quality switch | on | **1 / 3,050 again** (see below) | `in = 1525, out = 0` | **2–5 fps** |
+| Balance ton quoi | on | 1 / 2,000,000 | `in = 25000, out = 50000` | 23 fps |
+| Jalousie | on | 1 / 2,000,000 | guess mode | 24–25 fps |
+| Tout oublier | on | 1 / 2,000,000 | guess mode | 23–25 fps |
+
+The La thune row is the cleanest evidence of all. The test build only rewrote the header given to the decoder at setup. When the quality changed mid-video, the same decoder kept running (same stream ID, same surface, same mode), and the new quality's header arrived inside the video data, untouched. The decoder re-read it, set `in = 1525` (exactly 3,050 ÷ 2, the H.264 formula), and fell from 25 to 2 fps within a second. The only thing that changed was that number.
+
 ### Why no setting can fix it without root
 
 - Every decoder property the library reads is a `vendor.mstar.*` / `vendor.mtk.*` property, for example `vendor.mstar.render.planar` and `vendor.mtk.grm.displaybuffer.num`. On a user build these are SELinux-protected: `setprop` fails from adb.
@@ -156,6 +172,10 @@ Video stays on its own `SurfaceView` layer, so menus drawn over a playing video 
 [`patches/textureview`](patches/textureview) turns off the player-config flag that makes Spotify use a `SurfaceView`, so Spotify falls back to its built-in `TextureView` mode. Every decoder then gets usage `0x100`.
 
 It works on its own, but video frames are then drawn by the app's own UI thread, so opening a menu over a playing video hitches for a moment. Keep it for the case where a future Spotify version breaks the placeholder patch.
+
+### 🧪 Header rewrite (experiment, not shipped)
+
+[`experiments/header-timing`](experiments/header-timing) is the A/B test build's helper: it rewrites the header timing in the decoder's setup data to `1 / 2,000,000`, so the decoder measures the real rate from timestamps (`in = 24000` for 24 fps videos, `25000` for 25 fps) and keeps the efficient hardware-render mode. It's the fix closest to the root cause, but it's incomplete: it doesn't yet rewrite the copies of the header that arrive inside the video data on a quality switch, so it isn't offered as a patch.
 
 ### ❌ What didn't work
 

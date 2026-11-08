@@ -123,3 +123,30 @@ So the stall needs all four together:
 2. no frame rate from the app;
 3. the MStar decoder trusting the header;
 4. hardware-render mode, the only mode that paces output by that rate.
+
+## 9. A/B proof in Spotify
+
+Test build: the original Spotify setup (no placeholder fix) plus a helper that rewrites the VUI
+timing in `csd-0` to `1 / 2,000,000` before the decoder is configured, switchable at runtime with
+`adb shell setprop debug.vuifix 0|1`. Fields are fixed 32-bit, so only their bytes change.
+
+Rewrite off:
+- Jalousie: `VUI timing 1/3050 left as is`, `force frame rate in = 1000, out = 0`, 1–5 fps.
+- Tout oublier: `1/3050`, stalled.
+- Earlier rounds that only played videos with a `1/2000000` or `1/1499136` header were all smooth
+  (guess mode), as predicted.
+
+Rewrite on:
+- La thune, Balance ton quoi, Jalousie, Tout oublier: `1/3050 -> 1/2000000`,
+  `in = 25000, out = 50000` or guess mode, 23–25 fps.
+- La thune, 11 s in: a quality switch with no new decoder (stream 77 throughout, no new
+  `MediaFormat`) brought an in-band SPS with the original timing. The decoder logged
+  `force frame rate in = 1525, out = 0` and dropped from 25 to 16, then 2 fps. 1525 = 3050 / 2.
+
+Conclusions:
+- The header timing alone decides between smooth and stalled in hardware-render mode.
+- The decoder re-reads in-band SPS, so a header-rewrite fix must also rewrite SPS NAL units inside
+  input buffers, not just `csd-0`.
+- The value the decoder derives from a plausible header is not consistent (1000 at setup, 1525 from
+  in-band); both are far from the real 24–25 fps.
+
