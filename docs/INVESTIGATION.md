@@ -87,6 +87,39 @@ and both the video layer and the app window were composited by the display hardw
 
 A capture of the unpatched Spotify in the broken state showed the same `DEVICE` composition. The
 decoder still dropped to 0–3 fps, starting about 2 s after it started, around the time the display
-switched to 50 Hz. Hardware-render mode is therefore only harmful together with something specific
-to Spotify's player. That trigger is still unknown. Ruled out so far: secure layer, app-window
-properties, the refresh-rate switch alone, 1080p resolution.
+switched to 50 Hz. Hardware-render mode was therefore only harmful together with something specific
+to Spotify; section 8 shows what.
+
+## 8. The trigger: a wrong frame rate in the stream header
+
+Ruled out first, each with a modified demo build (all smooth):
+- 1080p 25 fps with audio;
+- 60↔50 Hz refresh switches timed 0.6–1.0 s after the decoder starts;
+- a first decoder on the placeholder followed by hardware-render decoders on the same layer;
+- a brand-new `SurfaceView` for every new decoder;
+- 16 reference frames and 8 B-frames.
+
+A Spotify build instrumented with per-frame logs showed:
+- In the broken state the player only receives 1–2 decoded frames a second and shows each one
+  immediately. The decoder is starving, not the player.
+- Each broken start produced the identical frame counter sequence 8, 16, 22, 25, 29, 30.
+- Spotify decrypts its streams in the app and queues clear data to the decoder.
+- The `MediaFormat` has no `frame-rate` key, so the decoder logs `Demuxer Frame Rate = 0 0`.
+
+The decoder's own frame-rate decision separated good from broken starts:
+
+| Spotify hardware-render start | Header timing | Decoder | Result |
+|---|---|---|---|
+| 00:30:01, 00:46:10 | 1 / 2,000,000 | `Enter FrameRate Guess Mode`, `in = 24000` | smooth |
+| 23:51:51, 00:20:17, 00:30:44 | plausible wrong value | no guess mode, `in = 1000, out = 0` | stall |
+
+Repro in the demo app (Media3 1.11.0): a 25 fps clip with its header rewritten to Spotify's
+`1 / 3050` (`ffmpeg -bsf:v h264_metadata=tick_rate=3050/1`):
+- with the frame rate left out of the `MediaFormat`: `in = 4000, out = 4000`, 5–11 fps;
+- with it passed (stock demo): `Demuxer Frame Rate = 25000`, 24–25 fps.
+
+So the stall needs all four together:
+1. a wrong-but-plausible header frame rate;
+2. no frame rate from the app;
+3. the MStar decoder trusting the header;
+4. hardware-render mode, the only mode that paces output by that rate.

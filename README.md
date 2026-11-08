@@ -19,7 +19,7 @@
 | | |
 |---|---|
 | **Symptom** | The first music video plays fine. Skip to the next one, let it autoplay, or let the quality step up, and the picture drops to about one frame every few seconds. A few seconds later the audio stops. |
-| **Root cause** | The TV's hardware decoder (`libOMX.MStar.so`) picks its output mode once, when it is set up. Set up directly on an **on-screen `SurfaceView`**, it picks a "hardware render" path, and in Spotify that path stalls at 0–3 fps. Spotify sets up a new decoder for every video and every quality change, always on its on-screen `SurfaceView`. (Google's Media3 demo app uses the same path on the same TV without stalling, so something specific to Spotify's player is also involved. See [what we don't know yet](#what-we-dont-know-yet).) |
+| **Root cause** | Spotify's video streams declare a **wrong frame rate** in their H.264 header (e.g. 1 tick per 3,050 units ≈ 1,525 fps), and Spotify's player never passes the real frame rate to the decoder. The TV's MStar decoder then trusts the header. In its **hardware-render** mode (used when a decoder is set up on an on-screen `SurfaceView`) the TV's video plane paces playback at that bogus rate, about 1 fps, and the stream stalls. Spotify sets up a new decoder for every video and every quality change, always on its on-screen `SurfaceView`, except the very first one. |
 | **Fix** | Patch Spotify's player (Media3) so every decoder is first set up on an **off-screen placeholder surface**, which gets the working mode, then moved to the real screen right before its first frame. |
 | **Root needed?** | No. The patched app is re-signed with your own key and installed over adb. |
 
@@ -54,66 +54,85 @@ Other TVs built on the MStar/MediaTek `T615`/`MT58xx` TV platforms (several TCL,
 
 ## Root cause
 
-### 1. The decoder chooses its mode from the surface's consumer usage
+Four things have to line up. Remove any one and the video plays.
 
-When `OMX.MS.AVC.Decoder` sets up its output buffers, it asks the output surface for its **consumer usage** bits, and the answer decides the whole pipeline:
+### 1. Spotify's streams carry a wrong frame-rate field
+
+H.264 streams can declare their frame rate in the sequence header (VUI `timing_info`). Spotify's music-video encodes fill it with junk:
+
+| Spotify stream | `num_units_in_tick` / `time_scale` | Declared rate |
+|---|---|---|
+| 1552×1080, 1568×1088, 1056×720 | 1 / 2,000,000 | ~1,000,000 fps |
+| 1280×720 | 1 / 3,050 | ~1,525 fps |
+
+Normal players ignore this field, because the real timing comes from the container.
+
+### 2. Spotify's player doesn't pass the real frame rate
+
+Spotify's streams don't declare a frame rate the player can read, so the `MediaFormat` it configures the decoder with has no `frame-rate` key. The decoder logs `Demuxer Frame Rate = 0 0`.
+
+### 3. The MStar decoder then trusts the header
+
+With no rate from the app, `libOMX.MStar.so` falls back to the header:
+
+- If the header rate is absurd (~1,000,000 fps), it logs `Enter FrameRate Guess Mode`, estimates from timestamps, and gets it right: `force frame rate in = 24000`.
+- If it's merely wrong (~1,525 fps), it passes the decoder's sanity check and ends up as `force frame rate in = 1000, out = 0`, which is 1 fps.
+
+### 4. Only the hardware-render mode uses that rate
+
+The decoder picks its output mode from the **consumer usage** of the surface it is set up on:
 
 ```text
-GOOD  MS_OSAL_BUFFER: ConsumerUsage: 100, Hardware Render: 0
-      Enable DIP Detile/MFDEC ... SW render with DIP-MFDEC support, change color format to NV12
-      gralloc buffers 1920x1088 usage 0x2400930 → MSTAR_VDEC_DBG Rate : 23–25
+DIP mode         MS_OSAL_BUFFER: ConsumerUsage: 100, Hardware Render: 0
+(placeholder,    Enable DIP Detile/MFDEC ... SW render with DIP-MFDEC support
+ TextureView)    → frames go through SurfaceFlinger, paced by their timestamps
 
-BAD   MS_OSAL_BUFFER: ConsumerUsage: 900, Hardware Render: 1
-      GRM: AcquireDispBuf OK: 0   (no DIP, takes the single display buffer)
-      1.8 KiB metadata buffers usage 0x42000900
-      → in Spotify: MSTAR_VDEC_DBG Rate : 0–3
+hardware-render  MS_OSAL_BUFFER: ConsumerUsage: 900, Hardware Render: 1
+(on-screen       GRM: AcquireDispBuf OK: 0
+ SurfaceView)    → frames go to the TV's video plane, paced by the decoder's frame rate
 ```
 
-- `0x100` is `GRALLOC_USAGE_HW_TEXTURE`, a GPU texture consumer, as with a `SurfaceTexture`.
-- `0x900` adds `GRALLOC_USAGE_HW_COMPOSER`, an on-screen layer, as with a `SurfaceView`.
+In hardware-render mode, the video plane releases frames at the bogus rate. The decoder runs out of output buffers and produces 0–3 frames a second. Spotify's player then flips between *playing* and *buffering* until the audio dies. In DIP mode the rate is never used, so the same stream plays fine.
 
-In "hardware render" mode the decoder hands out tiled frames meant for the TV's video plane. In Spotify the decoder then produces only 0–3 frames per second. In one capture SurfaceFlinger's Mali driver was also de-tiling every frame on the GPU; in a later one the video layer was on the display hardware and the decoder still stalled.
+### Why the first video works
 
-### 2. Spotify always sets up its decoder on the on-screen `SurfaceView`
-
-Spotify's TV player (Media3 `MediaCodecVideoRenderer`) does this:
-
-```text
-new video / quality change
-  └─ release the old MediaCodec, create a new OMX.MS.AVC.Decoder
-       └─ configure(surface = the SurfaceView already on screen)   ← consumer usage 0x900 → broken
-```
-
-Media3 only uses its off-screen **placeholder surface** when no display surface exists yet. That happens for exactly one decoder: the first one after Spotify opens, or after going back to the menu, when the video view's surface hasn't been created yet. That's the "first video works" pattern.
+Media3 sets up a decoder on its off-screen **placeholder surface** (DIP mode) only when no display surface exists yet. That's only true for the first video after Spotify opens, or after going back to the menu. Every later decoder is set up on the on-screen `SurfaceView` (hardware-render mode). It breaks only if that video's header carries a "plausible" wrong rate rather than an absurd one, so some videos break and others don't.
 
 ```mermaid
-flowchart LR
-    A[New decoder] --> B{Surface it is configured on}
-    B -->|On-screen SurfaceView<br/>usage 0x900| C[Hardware render mode]
-    C --> D[In Spotify: decoder stalls<br/>0–3 fps, audio dies]
-    B -->|Placeholder / SurfaceTexture<br/>usage 0x100| E[DIP mode, NV12]
-    E --> F[25 fps, smooth]
-    E -.->|setOutputSurface later| G[Moved to the SurfaceView<br/>keeps DIP mode]
+flowchart TD
+    A[New decoder] --> B{Surface it is set up on}
+    B -->|Placeholder / TextureView<br/>usage 0x100| C[DIP mode<br/>rate unused]
+    C --> OK[Smooth]
+    B -->|On-screen SurfaceView<br/>usage 0x900| D[Hardware-render mode]
+    D --> E{Frame rate known?}
+    E -->|App passed frame-rate| OK
+    E -->|Header rate absurd → guess mode| OK
+    E -->|Header rate wrong but plausible| BAD[Paced at ~1 fps<br/>stall, audio dies]
 ```
 
-### 3. Why no setting can fix it without root
+### Reproduced in Google's Media3 demo app
+
+Google's demo app (Media3 1.11.0, the same version Spotify ships) on the same TV, playing a 1080p 25 fps test clip whose header was rewritten to Spotify's `1 / 3050` timing:
+
+| Demo build | Decoder log | Decode rate |
+|---|---|---|
+| Frame rate passed to the decoder (stock demo) | `Demuxer Frame Rate = 25000`, `in = 25000, out = 50000` | 24–25 fps |
+| Frame rate left out (like Spotify) | `Demuxer Frame Rate = 0`, `in = 4000, out = 4000` | **5–11 fps** |
+
+Ruled out on the way, all smooth in the demo: audio sync, 1080p, 25 fps, 60↔50 Hz refresh switches at any time, a new `SurfaceView` per video, heavy reference-frame encodes, Media3 1.11 vs 1.12.
+
+### Why no setting can fix it without root
 
 - Every decoder property the library reads is a `vendor.mstar.*` / `vendor.mtk.*` property, for example `vendor.mstar.render.planar` and `vendor.mtk.grm.displaybuffer.num`. On a user build these are SELinux-protected: `setprop` fails from adb.
 - The software decoder (`c2.android.avc.decoder`) is ranked after the hardware one. Changing the ranking needs a media-server restart, which needs root.
-- Developer options don't help: *Disable HW overlays* and locking 60 Hz were tested with no change.
+- Developer options (*Disable HW overlays*, refresh-rate locks) don't touch this path.
 - There's no firmware update: V620 is the last one TCL published.
 
-### What we don't know yet
+### Who could fix it properly
 
-Google's Media3 demo app on the same TV also sets up new decoders on its on-screen `SurfaceView`, and gets the same `ConsumerUsage: 900, Hardware Render: 1` mode, but plays smoothly:
-
-| Demo app test | Result |
-|---|---|
-| 720p H.264 → HEVC → H.264 playlist (new decoder while video is on screen) | 29–31 fps |
-| 25 fps HEVC, with the display switching 60 → 50 Hz | 24–25 fps |
-| 1080p60 H.264 DASH, new decoder while video is on screen | 58–62 fps |
-
-So hardware-render mode is only harmful in combination with something Spotify's player does. Spotify's video layer isn't marked secure, and its app window looks the same as the demo's. The exact trigger is still unknown. The placeholder-first patch avoids it by keeping Spotify's decoders out of hardware-render mode.
+- **Spotify:** pass the frame rate (`MediaFormat.KEY_FRAME_RATE`) when it's known, and fix the encoder settings that write `timing_info` into its streams.
+- **TCL / MediaTek:** don't trust a header frame rate above any real-world value, and enter guess mode instead.
+- **Media3** isn't at fault: it passes the frame rate whenever the container provides one.
 
 The full investigation, with every dead end, is in [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md).
 
@@ -127,7 +146,7 @@ Both fixes are small edits to the Spotify app. The scripts find the code to chan
 
 [`patches/placeholder`](patches/placeholder) adds a small helper class, [`PlaceholderFirst`](patches/placeholder/PlaceholderFirst.smali.tmpl), to Media3's video renderer:
 
-1. **When a decoder is set up**, it's given Media3's placeholder surface instead of the on-screen `SurfaceView`. The decoder sees usage `0x100` and picks the working DIP mode.
+1. **When a decoder is set up**, it's given Media3's placeholder surface instead of the on-screen `SurfaceView`. The decoder sees usage `0x100` and picks DIP mode, which never uses the bogus frame rate.
 2. **Right before the first frame is rendered**, the decoder is moved to the real `SurfaceView` with `MediaCodec.setOutputSurface()`. It keeps the DIP mode.
 
 Video stays on its own `SurfaceView` layer, so menus drawn over a playing video stay smooth. This covers skips, autoplay and mid-video quality changes, because all of them create their decoder through the same renderer code.
