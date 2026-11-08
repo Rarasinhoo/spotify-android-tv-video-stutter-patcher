@@ -55,7 +55,12 @@ old_call = f'    invoke-interface {{p1, p2, p3, p4}}, {adapter}->{release}(IJ)V'
 new_render = render.replace(old_call,
     f'    invoke-static/range {{p0 .. p1}}, LPlaceholderFirst;->beforeRender({cls}{adapter})V\n\n' + old_call, 1)
 src = src.replace(render, new_render, 1)
-if 'phPending' not in src or src.count('LPlaceholderFirst;') != 2:
+# 4) when Media3 itself moves the decoder to a new surface, drop the pending switch
+own_switch = re.findall(r'    invoke-interface \{(v\d+), (v\d+)\}, ' + re.escape(adapter) + r'->' + set_surface + r'\(Landroid/view/Surface;\)V\n', src)
+own_switch = one(own_switch, "renderer's own setOutputSurface call")
+site = f'    invoke-interface {{{own_switch[0]}, {own_switch[1]}}}, {adapter}->{set_surface}(Landroid/view/Surface;)V\n'
+src = src.replace(site, site + f'\n    invoke-static/range {{p0 .. p0}}, LPlaceholderFirst;->surfaceMoved({cls})V\n', 1)
+if 'phPending' not in src or src.count('LPlaceholderFirst;') != 3:
     sys.exit('Invariant failed: renderer edits did not apply')
 renderer.write_text(src)
 

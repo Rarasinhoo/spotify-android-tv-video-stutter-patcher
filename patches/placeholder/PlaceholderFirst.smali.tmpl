@@ -61,3 +61,13 @@
     :out
     return-void
 .end method
+
+# Media3 moved the decoder to a new surface itself (the screen surface changed before the first
+# frame), so the pending switch is no longer needed.
+.method public static surfaceMoved(@CLS@)V
+    .locals 1
+
+    const/4 v0, 0x0
+    iput-boolean v0, p0, @CLS@->phPending:Z
+    return-void
+.end method
