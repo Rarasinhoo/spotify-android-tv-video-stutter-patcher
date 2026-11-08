@@ -2,6 +2,7 @@
 # Patch the Spotify Android TV app installed on your TV so music videos play on MStar/MediaTek TVs.
 #
 #   ./repatch.sh <tv-ip>[:port]                 placeholder-first fix (recommended)
+#   ./repatch.sh <tv-ip>[:port] --header-timing rewrite the bad header frame rate instead
 #   ./repatch.sh <tv-ip>[:port] --textureview   fallback fix
 #   ./repatch.sh <tv-ip>[:port] --dry-run       build only, change nothing on the TV
 #
@@ -10,13 +11,14 @@
 # Signing key: ./local/patch.keystore (created on first run), or set KEYSTORE and KEYSTORE_PASS.
 set -euo pipefail
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 [ $# -ge 1 ] || usage
 TV=$1; shift
 [[ $TV == *:* ]] || TV="$TV:5555"
 MODE=placeholder; DRY=0
 for a in "$@"; do case $a in
   --textureview) MODE=textureview ;;
+  --header-timing) MODE=header-timing ;;
   --dry-run) DRY=1 ;;
   *) usage ;;
 esac; done

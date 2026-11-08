@@ -156,7 +156,7 @@ The full investigation, with every dead end, is in [`docs/INVESTIGATION.md`](doc
 
 ## The fixes
 
-Both fixes are small edits to the Spotify app. The scripts find the code to change by its structure, not by the obfuscated class names (`b`, `R0`, …), which change in every Spotify version.
+Each fix is a small edit to the Spotify app. The scripts find the code to change by its structure, not by the obfuscated class names (`b`, `R0`, …), which change in every Spotify version.
 
 ### ✅ Placeholder-first (recommended)
 
@@ -173,9 +173,23 @@ Video stays on its own `SurfaceView` layer, so menus drawn over a playing video 
 
 It works on its own, but video frames are then drawn by the app's own UI thread, so opening a menu over a playing video hitches for a moment. Keep it for the case where a future Spotify version breaks the placeholder patch.
 
-### 🧪 Header rewrite (experiment, not shipped)
+### 🎯 Header timing (fixes the cause, newest)
 
-[`experiments/header-timing`](experiments/header-timing) is the A/B test build's helper: it rewrites the header timing in the decoder's setup data to `1 / 2,000,000`, so the decoder measures the real rate from timestamps (`in = 24000` for 24 fps videos, `25000` for 25 fps) and keeps the efficient hardware-render mode. It's the fix closest to the root cause, but it's incomplete: it doesn't yet rewrite the copies of the header that arrive inside the video data on a quality switch, so it isn't offered as a patch.
+[`patches/header-timing`](patches/header-timing) adds [`HeaderTiming`](patches/header-timing/HeaderTiming.java) to Media3's video renderer. It fixes the bad input itself and leaves the decoder in its efficient hardware-render mode:
+
+1. **When a decoder is set up**, the header timing in its setup data (`csd-0`) is rewritten to an absurd rate (`1 / 2,000,000`). The decoder rejects it, measures the real rate from timestamps (`Enter FrameRate Guess Mode`, `in = 25000` for 25 fps) and paces the video plane by it.
+2. **Every frame queued to the decoder** is checked for headers repeated inside the video, which is how a quality switch brings in a new one. Those are rewritten in place.
+
+Details that keep it safe:
+- each rewritten header keeps its exact byte length, so frame sizes and the rest of the data never move. When `1 / 2,000,000` would change the length, it picks another absurd value that doesn't;
+- real rates (up to 120 fps) are left alone;
+- only the parameter headers at the start of each frame are read, never the picture data.
+
+Tested on 12 H.264 clips (baseline to high profile, 352×288 to 1920×1080, Spotify's own timing values): same size, identical decoded frames, new timing in place. On the TV it held through skips, autoplay and a mid-video quality switch, with the decoder rewriting the new header (`SPS timing 1/3050 -> 1/2000000`) and no new decoder.
+
+It also paces better than the other fixes. In hardware-render mode the decoder drives the video plane at a matching refresh (`in = 25000, out = 50000`: 25 fps shown at 50 Hz, every frame held exactly two refreshes). In DIP mode the log shows `out = 0`, so a 25 fps video is shown on a 60 Hz path and frames alternate between two and three refreshes.
+
+Run it with `./repatch.sh <tv-ip> --header-timing`. It's newer than placeholder-first, which stays the default until it has had more hours on real use.
 
 ### ❌ What didn't work
 
@@ -217,7 +231,7 @@ brew install android-platform-tools apktool openjdk@21 && brew install --cask an
    - applies the placeholder fix and signs the result with a key it creates in `local/`;
    - uninstalls the official app and installs the patched one.
 
-   For the fallback, use `./repatch.sh <tv-ip> --textureview`. To build without touching the TV, add `--dry-run`.
+   For the header-timing fix, use `./repatch.sh <tv-ip> --header-timing`; for the fallback, `--textureview`. To build without touching the TV, add `--dry-run`.
 3. Open Spotify on the TV and log in again.
 
 ### Updating Spotify later

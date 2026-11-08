@@ -150,3 +150,16 @@ Conclusions:
 - The value the decoder derives from a plausible header is not consistent (1000 at setup, 1525 from
   in-band); both are far from the real 24–25 fps.
 
+
+## 10. The header-timing patch
+
+The complete version of the experiment in section 9 (`patches/header-timing`):
+- `csd-0` rewritten before the decoder is set up, and every SPS in each queued sample rewritten in
+  place (hooked in the video renderer's `onQueueInputBuffer`, before the parameter sets' first slice);
+- same-length rewrites only, so sample sizes and crypto subsample maps stay valid;
+- real rates (time_scale / num_units_in_tick ≤ 240) untouched.
+
+On the TV: a mid-video quality switch in La thune logged a second, different SPS rewritten
+(`SPS timing 1/3050 -> 1/2000000`) with no new decoder, and playback held at 24–25 fps. Every
+hardware-render start entered guess mode and set `in = 25000, out = 50000` for 25 fps videos, the
+video plane at 50 Hz. DIP-mode starts (placeholder) log `out = 0`.
