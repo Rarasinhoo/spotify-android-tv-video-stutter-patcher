@@ -72,3 +72,21 @@ The fresh-surface failure is what pinned the real condition. What matters isn't 
 surface already shows video. It's whether the decoder is set up directly on an on-screen surface
 at all. A new `SurfaceView`'s surface is created within milliseconds, long before the decoder
 is set up.
+
+## 7. Cross-check with Google's Media3 demo app
+
+To see whether the bug lives in Media3 itself, Google's demo app (Media3 1.12.0-alpha02, built from
+`main`) was run on the same TV. Every new decoder took `ConsumerUsage: 900, Hardware Render: 1`,
+and both the video layer and the app window were composited by the display hardware (`DEVICE`):
+
+| Test | Decode rate |
+|---|---|
+| 720p H.264 → HEVC → H.264 playlist (new decoder while video is on screen) | 29–31 fps |
+| 25 fps HEVC, display switching 60 → 50 Hz | 24–25 fps |
+| 1080p60 H.264 DASH, new decoder while video is on screen | 58–62 fps |
+
+A capture of the unpatched Spotify in the broken state showed the same `DEVICE` composition. The
+decoder still dropped to 0–3 fps, starting about 2 s after it started, around the time the display
+switched to 50 Hz. Hardware-render mode is therefore only harmful together with something specific
+to Spotify's player. That trigger is still unknown. Ruled out so far: secure layer, app-window
+properties, the refresh-rate switch alone, 1080p resolution.

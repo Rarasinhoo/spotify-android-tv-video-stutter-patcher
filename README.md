@@ -19,7 +19,7 @@
 | | |
 |---|---|
 | **Symptom** | The first music video plays fine. Skip to the next one, let it autoplay, or let the quality step up, and the picture drops to about one frame every few seconds. A few seconds later the audio stops. |
-| **Root cause** | The TV's hardware decoder (`libOMX.MStar.so`) picks its output mode once, when it is set up. Set up directly on an **on-screen `SurfaceView`**, it picks a "hardware render" path that the compositor can only show at 0–3 fps. Spotify sets up a new decoder for every video and every quality change, always on its on-screen `SurfaceView`. |
+| **Root cause** | The TV's hardware decoder (`libOMX.MStar.so`) picks its output mode once, when it is set up. Set up directly on an **on-screen `SurfaceView`**, it picks a "hardware render" path, and in Spotify that path stalls at 0–3 fps. Spotify sets up a new decoder for every video and every quality change, always on its on-screen `SurfaceView`. (Google's Media3 demo app uses the same path on the same TV without stalling, so something specific to Spotify's player is also involved. See [what we don't know yet](#what-we-dont-know-yet).) |
 | **Fix** | Patch Spotify's player (Media3) so every decoder is first set up on an **off-screen placeholder surface**, which gets the working mode, then moved to the real screen right before its first frame. |
 | **Root needed?** | No. The patched app is re-signed with your own key and installed over adb. |
 
@@ -66,14 +66,13 @@ GOOD  MS_OSAL_BUFFER: ConsumerUsage: 100, Hardware Render: 0
 BAD   MS_OSAL_BUFFER: ConsumerUsage: 900, Hardware Render: 1
       GRM: AcquireDispBuf OK: 0   (no DIP, takes the single display buffer)
       1.8 KiB metadata buffers usage 0x42000900
-      surfaceflinger / mali_winsys: "Allocated detiled_native_buffer (1920 * 1088)" ×9
-      → the GPU detiles every frame → MSTAR_VDEC_DBG Rate : 0–3
+      → in Spotify: MSTAR_VDEC_DBG Rate : 0–3
 ```
 
 - `0x100` is `GRALLOC_USAGE_HW_TEXTURE`, a GPU texture consumer, as with a `SurfaceTexture`.
 - `0x900` adds `GRALLOC_USAGE_HW_COMPOSER`, an on-screen layer, as with a `SurfaceView`.
 
-In "hardware render" mode the decoder hands out tiled frames meant for the TV's video plane. For an app's `SurfaceView` they end up in SurfaceFlinger, where the Mali driver de-tiles every frame on the GPU, at a few frames per second.
+In "hardware render" mode the decoder hands out tiled frames meant for the TV's video plane. In Spotify the decoder then produces only 0–3 frames per second. In one capture SurfaceFlinger's Mali driver was also de-tiling every frame on the GPU; in a later one the video layer was on the display hardware and the decoder still stalled.
 
 ### 2. Spotify always sets up its decoder on the on-screen `SurfaceView`
 
@@ -91,7 +90,7 @@ Media3 only uses its off-screen **placeholder surface** when no display surface 
 flowchart LR
     A[New decoder] --> B{Surface it is configured on}
     B -->|On-screen SurfaceView<br/>usage 0x900| C[Hardware render mode]
-    C --> D[GPU de-tiles each frame<br/>0–3 fps, audio dies]
+    C --> D[In Spotify: decoder stalls<br/>0–3 fps, audio dies]
     B -->|Placeholder / SurfaceTexture<br/>usage 0x100| E[DIP mode, NV12]
     E --> F[25 fps, smooth]
     E -.->|setOutputSurface later| G[Moved to the SurfaceView<br/>keeps DIP mode]
@@ -103,6 +102,18 @@ flowchart LR
 - The software decoder (`c2.android.avc.decoder`) is ranked after the hardware one. Changing the ranking needs a media-server restart, which needs root.
 - Developer options don't help: *Disable HW overlays* and locking 60 Hz were tested with no change.
 - There's no firmware update: V620 is the last one TCL published.
+
+### What we don't know yet
+
+Google's Media3 demo app on the same TV also sets up new decoders on its on-screen `SurfaceView`, and gets the same `ConsumerUsage: 900, Hardware Render: 1` mode, but plays smoothly:
+
+| Demo app test | Result |
+|---|---|
+| 720p H.264 → HEVC → H.264 playlist (new decoder while video is on screen) | 29–31 fps |
+| 25 fps HEVC, with the display switching 60 → 50 Hz | 24–25 fps |
+| 1080p60 H.264 DASH, new decoder while video is on screen | 58–62 fps |
+
+So hardware-render mode is only harmful in combination with something Spotify's player does. Spotify's video layer isn't marked secure, and its app window looks the same as the demo's. The exact trigger is still unknown. The placeholder-first patch avoids it by keeping Spotify's decoders out of hardware-render mode.
 
 The full investigation, with every dead end, is in [`docs/INVESTIGATION.md`](docs/INVESTIGATION.md).
 
