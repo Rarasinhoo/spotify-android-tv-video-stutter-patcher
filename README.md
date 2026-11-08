@@ -165,7 +165,7 @@ Each fix is a small edit to the Spotify app. The scripts find the code to change
 1. **When a decoder is set up**, it's given Media3's placeholder surface instead of the on-screen `SurfaceView`. The decoder sees usage `0x100` and picks DIP mode, which never uses the bogus frame rate.
 2. **Right before the first frame is rendered**, the decoder is moved to the real `SurfaceView` with `MediaCodec.setOutputSurface()`. It keeps the DIP mode.
 
-Video stays on its own `SurfaceView` layer, so menus drawn over a playing video stay smooth. This covers skips, autoplay and mid-video quality changes, because all of them create their decoder through the same renderer code.
+Video stays on its own `SurfaceView` layer, so menus drawn over a playing video stay smooth. This covers skips, autoplay, mid-video quality changes, reopening a video from the menu and coming back from the Home screen mid-video, because all of them create their decoder through the same renderer code. All of these were checked on the TV.
 
 ### 🛟 TextureView (fallback)
 
@@ -187,7 +187,7 @@ Details that keep it safe:
 
 Tested on 12 H.264 clips (baseline to high profile, 352×288 to 1920×1080, Spotify's own timing values): same size, identical decoded frames, new timing in place. On the TV it held through skips, autoplay and a mid-video quality switch, with the decoder rewriting the new header (`SPS timing 1/3050 -> 1/2000000`) and no new decoder.
 
-**Known limitation:** this fix depends on the decoder's own frame-rate estimate (guess mode), and that estimate isn't reliable. When a decoder starts while the TV is still at 60 Hz, for example right after coming back from the Home screen, it often settles on `in = 15000, out = 60000` instead of `in = 25000, out = 50000`. The video then stutters even though every frame is decoded, until a new decoder or a quality switch makes it estimate again. Placeholder-first never uses that estimate, so it doesn't have this problem.
+**Known limitation:** this fix depends on the decoder's own frame-rate estimate (guess mode), and that estimate isn't reliable. When a decoder starts while the TV is still at 60 Hz, for example right after coming back from the Home screen, it often settles on `in = 15000, out = 60000` instead of `in = 25000, out = 50000`. The video then stutters even though every frame is decoded, until a new decoder or a quality switch makes it estimate again. Placeholder-first never uses that estimate, and the same Home-and-back test plays smoothly with it.
 
 Run it with `./repatch.sh <tv-ip> --header-timing`. Placeholder-first stays the default.
 

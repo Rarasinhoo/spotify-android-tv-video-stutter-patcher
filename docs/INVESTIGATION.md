@@ -169,3 +169,6 @@ the display was still at 60 Hz (after Home and back, or reopening a video from t
 `in = 25000, out = 50000` and played evenly. A quality switch makes it estimate again, sometimes to
 `in = 60000, out = 60000`. Android switches the display to 50 Hz for 25 fps video in DIP mode too, so
 placeholder-first gets the same even pacing without depending on the estimate.
+
+Placeholder-first reinstalled and checked with the same Home-and-back sequence: smooth. It stays the
+recommended fix; header-timing is kept as an experiment.
