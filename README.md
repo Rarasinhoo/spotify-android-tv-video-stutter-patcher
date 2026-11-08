@@ -173,7 +173,7 @@ Video stays on its own `SurfaceView` layer, so menus drawn over a playing video 
 
 It works on its own, but video frames are then drawn by the app's own UI thread, so opening a menu over a playing video hitches for a moment. Keep it for the case where a future Spotify version breaks the placeholder patch.
 
-### 🎯 Header timing (fixes the cause, newest)
+### 🧪 Header timing (experimental: relies on the decoder's frame-rate guess)
 
 [`patches/header-timing`](patches/header-timing) adds [`HeaderTiming`](patches/header-timing/HeaderTiming.java) to Media3's video renderer. It fixes the bad input itself and leaves the decoder in its efficient hardware-render mode:
 
