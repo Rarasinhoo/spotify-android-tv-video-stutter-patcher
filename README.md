@@ -191,23 +191,6 @@ Tested on 12 H.264 clips (baseline to high profile, 352×288 to 1920×1080, Spot
 
 Run it with `./repatch.sh <tv-ip> --header-timing`. Placeholder-first stays the default.
 
-### 📐 Aspect ratio (applied with every fix)
-
-Spotify's TV app stretches every music video to fill the screen. Its video view has four scale modes (`ASPECT_FIT`, `ASPECT_FILL`, `ASPECT_FILL_DISPLAY_AR`, `STRETCH`) and the app picks `ASPECT_FILL`. In `TextureView` mode that crops through a transform matrix. In `SurfaceView` mode, which is what TVs get, the view just lays the `SurfaceView` out at the container's full size. A 1590×1080 video such as Tate McRae's *Housewife* ends up in a 1920×1080 frame, 1.2× too wide. That's Spotify's behaviour, not a side effect of the fixes above. Neither Spotify nor the TV has a setting for it.
-
-[`patches/aspect`](patches/aspect) makes two edits, found by code shape:
-
-1. Every place that picks `ASPECT_FILL` picks `ASPECT_FIT` instead, so the `SurfaceView` takes the video's own shape, centred, with black bars where the shapes differ.
-2. The width Spotify gives the view is multiplied by Media3's pixel aspect ratio, so anamorphic streams come out right too. Spotify passes the raw decoded width and ignores that ratio.
-
-Indochine's *College Boy* (1132×1080, almost square) on the same TV, before and after:
-
-| Stock Spotify: 1.70× too wide | With the aspect fix |
-|---|---|
-| ![College Boy stretched](docs/aspect/college-boy-before.jpg) | ![College Boy at its own aspect ratio](docs/aspect/college-boy-after.jpg) |
-
-On the TV, *Housewife*'s video layer went from `displayFrame 0,0–1920,1080` for a 1590×1080 source to `165,0–1755,1080`. A 16:9 video still fills the screen. Skips stayed at 24 fps in DIP mode.
-
 ### ❌ What didn't work
 
 | Attempt | Result |
@@ -245,7 +228,7 @@ brew install android-platform-tools apktool openjdk@21 && brew install --cask an
 
    The script:
    - pulls Spotify from the TV and verifies it's Spotify's signed build;
-   - applies the placeholder fix and the aspect-ratio fix, and signs the result with a key it creates in `local/`;
+   - applies the placeholder fix and signs the result with a key it creates in `local/`;
    - uninstalls the official app and installs the patched one.
 
    For the header-timing fix, use `./repatch.sh <tv-ip> --header-timing`; for the fallback, `--textureview`. To build without touching the TV, add `--dry-run`.
@@ -285,6 +268,10 @@ With the fix, every new video logs `decoder configured on placeholder surface`, 
 | newer | should apply; the script stops with a clear error if the code changed | should apply |
 
 If you try another TV model or Spotify version, please open an issue with your model, firmware and result.
+
+## Also: stretched videos
+
+Spotify's TV app also stretches music videos that aren't 16:9. That's a separate problem with its own opt-in fix: see [docs/ASPECT.md](docs/ASPECT.md).
 
 ## License
 

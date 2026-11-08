@@ -5,23 +5,23 @@
 #   ./repatch.sh <tv-ip>[:port] --header-timing rewrite the bad header frame rate instead
 #   ./repatch.sh <tv-ip>[:port] --textureview   fallback fix
 #   ./repatch.sh <tv-ip>[:port] --dry-run       build only, change nothing on the TV
-#
-# Every mode also keeps videos at their own aspect ratio (patches/aspect) instead of stretched.
+#   add --aspect to any of these to stop non-16:9 videos being stretched (docs/ASPECT.md)
 #
 # Steps: pull the official Spotify from the TV, verify it is Spotify's signed build, patch it,
 # sign it with your local key, uninstall the official app and install the patched one.
 # Signing key: ./local/patch.keystore (created on first run), or set KEYSTORE and KEYSTORE_PASS.
 set -euo pipefail
 
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 [ $# -ge 1 ] || usage
 TV=$1; shift
 [[ $TV == *:* ]] || TV="$TV:5555"
-MODE=placeholder; DRY=0
+MODE=placeholder; DRY=0; ASPECT=0
 for a in "$@"; do case $a in
   --textureview) MODE=textureview ;;
   --header-timing) MODE=header-timing ;;
   --dry-run) DRY=1 ;;
+  --aspect) ASPECT=1 ;;
   *) usage ;;
 esac; done
 
@@ -66,7 +66,7 @@ CERT=$("$BT/apksigner" verify --print-certs "$W/orig/base.apk" | grep -m1 'SHA-2
 
 apktool d -r -f -o "$W/src" "$W/orig/base.apk" >/dev/null
 python3 -I "$HERE/patches/$MODE/patch_$MODE.py" "$W/src"
-python3 -I "$HERE/patches/aspect/patch_aspect.py" "$W/src"
+if [ $ASPECT = 1 ]; then python3 -I "$HERE/patches/aspect/patch_aspect.py" "$W/src"; fi
 apktool b -o "$W/base-unsigned.apk" "$W/src" >/dev/null
 
 mkdir -p "$W/out"
@@ -78,7 +78,8 @@ for f in "$W"/a-*.apk; do
 done
 rm -f "$W"/out/*.idsig
 
-DEST="$HERE/local/$MODE-$VER"
+SUFFIX=""; if [ $ASPECT = 1 ]; then SUFFIX=-aspect; fi
+DEST="$HERE/local/$MODE$SUFFIX-$VER"
 mkdir -p "$DEST"
 cp "$W"/out/*.apk "$DEST/"
 echo "Built $DEST"
