@@ -24,13 +24,13 @@
 .method constructor <init>([B)V
     .locals 0
 
-    .line 281
+    .line 274
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
 
-    .line 282
+    .line 275
     iput-object p1, p0, LHeaderTiming$Bits;->b:[B
 
-    .line 283
+    .line 276
     return-void
 .end method
 
@@ -39,13 +39,13 @@
 .method put32(J)V
     .locals 8
 
-    .line 312
+    .line 305
     const/16 v0, 0x1f
 
     :goto_0
     if-ltz v0, :cond_0
 
-    .line 313
+    .line 306
     shr-long v1, p1, v0
 
     const-wide/16 v3, 0x1
@@ -64,7 +64,7 @@
 
     rsub-int/lit8 v3, v3, 0x7
 
-    .line 314
+    .line 307
     iget-object v4, p0, LHeaderTiming$Bits;->b:[B
 
     iget-object v5, p0, LHeaderTiming$Bits;->b:[B
@@ -87,19 +87,19 @@
 
     aput-byte v2, v4, v1
 
-    .line 315
+    .line 308
     iget v1, p0, LHeaderTiming$Bits;->pos:I
 
     add-int/2addr v1, v6
 
     iput v1, p0, LHeaderTiming$Bits;->pos:I
 
-    .line 312
+    .line 305
     add-int/lit8 v0, v0, -0x1
 
     goto :goto_0
 
-    .line 317
+    .line 310
     :cond_0
     return-void
 .end method
@@ -107,12 +107,12 @@
 .method se()I
     .locals 2
 
-    .line 307
+    .line 300
     invoke-virtual {p0}, LHeaderTiming$Bits;->ue()I
 
     move-result v0
 
-    .line 308
+    .line 301
     and-int/lit8 v1, v0, 0x1
 
     if-eqz v1, :cond_0
@@ -135,10 +135,10 @@
 .method u(I)I
     .locals 4
 
-    .line 286
+    .line 279
     nop
 
-    .line 287
+    .line 280
     const/4 v0, 0x0
 
     const/4 v1, 0x0
@@ -146,7 +146,7 @@
     :goto_0
     if-ge v0, p1, :cond_0
 
-    .line 288
+    .line 281
     shl-int/lit8 v1, v1, 0x1
 
     iget-object v2, p0, LHeaderTiming$Bits;->b:[B
@@ -169,19 +169,19 @@
 
     or-int/2addr v1, v2
 
-    .line 289
+    .line 282
     iget v2, p0, LHeaderTiming$Bits;->pos:I
 
     add-int/lit8 v2, v2, 0x1
 
     iput v2, p0, LHeaderTiming$Bits;->pos:I
 
-    .line 287
+    .line 280
     add-int/lit8 v0, v0, 0x1
 
     goto :goto_0
 
-    .line 291
+    .line 284
     :cond_0
     return v1
 .end method
@@ -189,7 +189,7 @@
 .method u32()J
     .locals 5
 
-    .line 295
+    .line 288
     const/16 v0, 0x10
 
     invoke-virtual {p0, v0}, LHeaderTiming$Bits;->u(I)I
@@ -214,10 +214,10 @@
 .method ue()I
     .locals 3
 
-    .line 299
+    .line 292
     const/4 v0, 0x0
 
-    .line 300
+    .line 293
     :goto_0
     const/4 v1, 0x1
 
@@ -227,7 +227,7 @@
 
     if-nez v2, :cond_1
 
-    .line 301
+    .line 294
     add-int/lit8 v0, v0, 0x1
 
     const/16 v1, 0x1f
@@ -243,7 +243,7 @@
 
     throw v0
 
-    .line 303
+    .line 296
     :cond_1
     shl-int v2, v1, v0
 

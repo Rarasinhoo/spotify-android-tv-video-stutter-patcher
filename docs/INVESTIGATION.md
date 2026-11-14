@@ -172,3 +172,61 @@ placeholder-first gets the same even pacing without depending on the estimate.
 
 Placeholder-first reinstalled and checked with the same Home-and-back sequence: smooth. It stays the
 recommended fix; header-timing is kept as an experiment.
+
+## 11. Heavy scenes drop to 5–8 fps with placeholder-first
+
+With placeholder-first installed, Timber (Pitbull) played smoothly except in the same six stretches
+every time, about 10 s each, where the picture fell to 5–8 fps. Die Young (Kesha) was reported to do
+the same. Lower quality hid it.
+
+`patches/frame-diag` logged what Media3 did with each output frame, next to the decoder's own rate:
+
+| | Calm scenes | Heavy scenes |
+|---|---|---|
+| `MSTAR_VDEC_DBG Rate` | 23–24 | 22–24 |
+| Output frames reaching Media3 per second | 24 | 24 |
+| Early against the audio clock | +40 ms | −50 to −280 ms, growing over the stretch |
+| Dropped by Media3 per second | 0 | 10–19 |
+
+So the decoder decoded every frame, slightly slower than real time (about 22–23 a second against
+23.976), and the delay built up over the stretch until the scene got lighter. Media3 dropped every
+frame more than 30 ms late, which is correct: the frames it did show were just as late, and dropping
+keeps audio and video in sync when a decoder is only briefly slow. Rendering late frames instead would
+only have hidden the problem.
+
+DIP mode costs more per frame: the DIP engine copies each frame into a 1920×1088 NV12 buffer, and
+SurfaceFlinger composites that buffer with the app window on the GPU (`CLIENT` composition) at 60 Hz.
+The decoder, DIP and GPU all share memory bandwidth on the MT5889. The most likely explanation is
+that heavy, high-bitrate scenes then leave the decoder too little bandwidth. Hardware-render mode
+skips the copy and the GPU composition, because frames go straight to the video plane.
+
+## 12. Hardware-render mode with a declared 60 fps
+
+The same Timber run with header-timing, which keeps hardware-render mode, had late frames only in the
+first ~15 s, around the first quality switch. The heavy stretches later in the video were on time.
+Hardware-render mode is the right path; only its frame rate had to be made reliable.
+
+Guess mode settled on `in = 60000, out = 60000` for Timber and played evenly, but started at
+`in = 15000` for a moment (the §10 failure). Every observation fits one rule: in hardware-render mode
+the decoder releases frames no faster than its frame rate, and by timestamps below it.
+
+| Decoder rate (`force frame rate in`) | Real rate | Result |
+|---|---|---|
+| 1,000–1,525 (bogus header trusted) | 24–25 | ~1 fps, stall |
+| 15,000 (guess at 60 Hz) | 25 | stutter, every frame decoded |
+| 25,000 / 60,000 | 24–25 | even |
+
+So `HeaderTiming` now rewrites every header rate above 60 fps to exactly 60 fps (`u / 120u`, with `u`
+chosen to keep the escaped NAL's length) instead of to an absurd value. The decoder trusts 60 fps as
+a real rate, never enters guess mode, and 60 is at or above every music video's rate.
+
+On the TV, every decoder logged `in = 60000`:
+- Timber, full length: late frames only in the first ~15 s; autoplay into the next video clean.
+- Home and back mid-video, the §10 failure: clean after the usual catch-up on resume.
+- La thune (`1 / 3050`, 25 fps, display at 50 Hz) and skips through three more Angèle videos:
+  10 dropped frames in 90 s, all right after starting a new video.
+
+Header-timing at 60 fps is now the default fix; placeholder-first is the fallback.
+
+Still open: a stream whose SPS has no `timing_info` at all would still enter guess mode, because
+adding the field changes the header's length. None of Spotify's streams seen so far lacks it.

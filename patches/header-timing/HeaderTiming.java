@@ -7,9 +7,10 @@ import java.util.Arrays;
 /**
  * Neutralises the wrong-but-plausible frame rate Spotify writes into its H.264 headers (VUI
  * timing_info, e.g. 1 / 3050). The MStar decoder trusts such a rate in hardware-render mode and paces
- * the video plane by it (1-2 fps). An absurd rate (>= 1,000,000 fps) makes it measure the real rate
- * from timestamps instead ("FrameRate Guess Mode"), the same thing it does for Spotify's videos that
- * already play fine. Real rates (up to 120 fps) are left alone.
+ * the video plane by it (1-2 fps). Every rate above DECLARED_FPS (wrong or absurd) is rewritten to
+ * exactly DECLARED_FPS, so the decoder never falls back to guessing the rate from timestamps
+ * ("FrameRate Guess Mode"), whose estimate is unreliable. Real rates up to DECLARED_FPS are left
+ * alone.
  *
  * The header reaches the decoder twice: in csd-0 when the decoder is set up, and again inside the
  * samples on a quality switch that keeps the decoder. Both are rewritten. Inside a sample the
@@ -18,8 +19,14 @@ import java.util.Arrays;
  */
 public final class HeaderTiming {
   private static final String TAG = "HeaderTiming";
-  /** Smallest declared rate (time_scale / num_units_in_tick, i.e. 2x fps) treated as absurd. */
-  private static final long ABSURD = 2_000_000L;
+  /**
+   * The rate every bogus header is rewritten to. In hardware-render mode the decoder releases frames
+   * to the video plane no faster than its frame rate ("force frame rate in"), and by their
+   * timestamps below it. A rate at or above the real one plays evenly; one below it starves the
+   * plane (1,525 fps headers become ~1 fps, a 15 fps guess stutters). 60 is a valid rate the decoder
+   * trusts (no guess mode) and at or above every music video's real rate.
+   */
+  static final long DECLARED_FPS = 60;
 
   private static volatile boolean avc;
   private static byte[] lastIn;
@@ -115,7 +122,7 @@ public final class HeaderTiming {
     return -1;
   }
 
-  /** Returns a same-length SPS NAL with an absurd timing, or null to leave it as is. */
+  /** Returns a same-length SPS NAL declaring DECLARED_FPS, or null to leave it as is. */
   static synchronized byte[] rewriteSps(byte[] nal) {
     if (lastIn != null && Arrays.equals(lastIn, nal)) return lastOut;
     byte[] out = compute(nal);
@@ -131,40 +138,26 @@ public final class HeaderTiming {
     Bits r = new Bits(rbsp);
     r.pos = pos;
     long units = r.u32(), scale = r.u32();
-    // Leave real rates (up to 120 fps) and already-absurd ones alone.
-    if (units != 0 && (scale <= 240 * units || scale / units >= ABSURD)) return null;
-    for (long u : new long[] {1, 2, 3, 4, 5, 6, 7, 8, 16, 256, 257, 512, 1000}) {
-      for (long s : scales(u)) {
-        Bits w = new Bits(rbsp.clone());
-        w.pos = pos;
-        w.put32(u);
-        w.put32(s);
-        byte[] cand = escape(nal[0], w.b);
-        if (cand.length == nal.length) {
-          Log.i(TAG, "SPS timing " + units + "/" + scale + " -> " + u + "/" + s);
-          return cand;
-        }
+    // Leave real rates (up to DECLARED_FPS) alone.
+    if (units != 0 && scale <= 2 * DECLARED_FPS * units) return null;
+    // fps = time_scale / (2 * num_units_in_tick): any u with s = 2 * DECLARED_FPS * u declares
+    // exactly DECLARED_FPS; try u values until the escaped NAL keeps its length.
+    for (long u = 1; u <= 100_000; u++) {
+      long s = 2 * DECLARED_FPS * u;
+      Bits w = new Bits(rbsp.clone());
+      w.pos = pos;
+      w.put32(u);
+      w.put32(s);
+      byte[] cand = escape(nal[0], w.b);
+      if (cand.length == nal.length) {
+        Log.i(TAG, "SPS timing " + units + "/" + scale + " -> " + u + "/" + s);
+        return cand;
       }
     }
     Log.w(TAG, "SPS timing " + units + "/" + scale + " left as is: no same-length rewrite");
     return null;
   }
 
-  /** time_scale candidates for num_units_in_tick u, 2,000,000 first, varied zero-byte patterns. */
-  private static long[] scales(long u) {
-    long[] bases = {2_000_000L, 0x00200000L, 0x00400000L, 0x00800000L, 0x01000000L, 0x02000000L,
-        0x04000000L, 0x08000000L, 0x10000000L, 0x20000000L, 0x40000000L, 0x7F000000L};
-    long[] lows = {0, 1, 0x100, 0x101, 0x10000, 0x10001, 0x10100, 0x10101, 0xFF, 0xFFFF, 0xFFFFFF};
-    long[] out = new long[bases.length * lows.length];
-    int n = 0;
-    for (long base : bases) {
-      for (long low : lows) {
-        long s = base == 2_000_000L ? base * u + low : base | low;
-        if (s <= 0x7FFFFFFFL && s / u >= ABSURD) out[n++] = s;
-      }
-    }
-    return Arrays.copyOf(out, n);
-  }
 
   /** Bit position of num_units_in_tick in an SPS RBSP (after the NAL header), or -1. */
   static int timingPos(byte[] rbsp) {

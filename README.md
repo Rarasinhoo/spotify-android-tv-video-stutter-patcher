@@ -20,7 +20,7 @@
 |---|---|
 | **Symptom** | The first music video plays fine. Skip to the next one, let it autoplay, or let the quality step up, and the picture drops to about one frame every few seconds. A few seconds later the audio stops. |
 | **Root cause** | Spotify's video streams declare a **wrong frame rate** in their H.264 header (e.g. 1 tick per 3,050 units ≈ 1,525 fps), and Spotify's player never passes the real frame rate to the decoder. The TV's MStar decoder then trusts the header. In its **hardware-render** mode (used when a decoder is set up on an on-screen `SurfaceView`) the TV's video plane paces playback at that bogus rate, about 1 fps, and the stream stalls. Spotify sets up a new decoder for every video and every quality change, always on its on-screen `SurfaceView`, except the very first one. |
-| **Fix** | Patch Spotify's player (Media3) so every decoder is first set up on an **off-screen placeholder surface**, which gets the working mode, then moved to the real screen right before its first frame. |
+| **Fix** | Patch Spotify's player (Media3) so the frame rate in every H.264 header it hands the decoder reads **60 fps**: a valid rate the decoder trusts, and never below the video's real rate. The decoder stays in its native **hardware-render** mode, the only mode that keeps up with Spotify's 1080p videos. |
 | **Root needed?** | No. The patched app is re-signed with your own key and installed over adb. |
 
 ---
@@ -158,38 +158,39 @@ The full investigation, with every dead end, is in [`docs/INVESTIGATION.md`](doc
 
 Each fix is a small edit to the Spotify app. The scripts find the code to change by its structure, not by the obfuscated class names (`b`, `R0`, …), which change in every Spotify version.
 
-### ✅ Placeholder-first (recommended)
+### ✅ Header timing at 60 fps (recommended, default)
+
+[`patches/header-timing`](patches/header-timing) adds [`HeaderTiming`](patches/header-timing/HeaderTiming.java) to Media3's video renderer. It fixes the bad input itself, so the decoder can stay in hardware-render mode:
+
+1. **When a decoder is set up**, the frame rate in the header in its setup data (`csd-0`) is rewritten to exactly 60 fps (`num_units_in_tick` / `time_scale` = `u / 120u`).
+2. **Every frame queued to the decoder** is checked for headers repeated inside the video, which is how a quality switch brings in a new one. Those are rewritten the same way.
+
+Why 60: in hardware-render mode the decoder releases frames to the video plane **no faster than its frame rate** and by their timestamps below it. A rate below the real one starves the plane (Spotify's 1,525 fps headers end up as ~1 fps; a 15 fps guess stutters). A rate at or above it plays evenly. 60 fps is a rate the decoder trusts as-is (`force frame rate in = 60000`), so it never falls back to guessing from timestamps, and it's at or above every music video's real rate (23.976, 25, 30). Headers that already declare a real rate up to 60 fps are left alone.
+
+Details that keep it safe:
+- each rewritten header keeps its exact byte length, so frame sizes and the rest of the data never move. Any `u` gives exactly 60 fps, so it tries `u` = 1, 2, 3, … until the escaped header keeps its length;
+- only the parameter headers at the start of each frame are read, never the picture data.
+
+Checked on the TV with a frame logger ([`patches/frame-diag`](patches/frame-diag)): Timber and its heavy scenes, La thune (`1 / 3050`, 25 fps, display at 50 Hz), skips, autoplay, mid-video quality switches, Home and back. Every decoder logs `in = 60000`, no guess mode, and late frames only show up for a moment when a video starts.
+
+### 🛟 Placeholder-first (fallback)
 
 [`patches/placeholder`](patches/placeholder) adds a small helper class, [`PlaceholderFirst`](patches/placeholder/PlaceholderFirst.smali.tmpl), to Media3's video renderer:
 
 1. **When a decoder is set up**, it's given Media3's placeholder surface instead of the on-screen `SurfaceView`. The decoder sees usage `0x100` and picks DIP mode, which never uses the bogus frame rate.
 2. **Right before the first frame is rendered**, the decoder is moved to the real `SurfaceView` with `MediaCodec.setOutputSurface()`. It keeps the DIP mode.
 
-Video stays on its own `SurfaceView` layer, so menus drawn over a playing video stay smooth. This covers skips, autoplay, mid-video quality changes, reopening a video from the menu and coming back from the Home screen mid-video, because all of them create their decoder through the same renderer code. All of these were checked on the TV.
+It fixes the 1 fps bug, but DIP mode is the slow path. Every frame is copied once more by the DIP engine and then composited by the GPU (`CLIENT` composition) at 60 Hz, all through the same memory as the decoder. In heavy, high-bitrate 1080p scenes the decoder then delivers about 22–23 frames a second instead of 23.976. The delay grows to 50–280 ms and Media3 correctly drops the late frames, so those scenes show 5–8 fps. Lower quality hides it. Measured on Timber (Pitbull) in six stretches, the same ones every time, and also reported on Die Young (Kesha). Hardware-render mode plays the same scenes on time.
 
-### 🛟 TextureView (fallback)
+Use it with `./repatch.sh <tv-ip> --placeholder` if a future Spotify version breaks the header-timing patch.
 
-[`patches/textureview`](patches/textureview) turns off the player-config flag that makes Spotify use a `SurfaceView`, so Spotify falls back to its built-in `TextureView` mode. Every decoder then gets usage `0x100`.
+### 🛟 TextureView (last resort)
 
-It works on its own, but video frames are then drawn by the app's own UI thread, so opening a menu over a playing video hitches for a moment. Keep it for the case where a future Spotify version breaks the placeholder patch.
+[`patches/textureview`](patches/textureview) turns off the player-config flag that makes Spotify use a `SurfaceView`, so Spotify falls back to its built-in `TextureView` mode. Every decoder then gets usage `0x100` (DIP mode, with the same heavy-scene limit), and video frames are drawn by the app's own UI thread, so opening a menu over a playing video hitches for a moment.
 
-### 🧪 Header timing (experimental: relies on the decoder's frame-rate guess)
+### 🔬 Frame logger (diagnostic)
 
-[`patches/header-timing`](patches/header-timing) adds [`HeaderTiming`](patches/header-timing/HeaderTiming.java) to Media3's video renderer. It fixes the bad input itself and leaves the decoder in its efficient hardware-render mode:
-
-1. **When a decoder is set up**, the header timing in its setup data (`csd-0`) is rewritten to an absurd rate (`1 / 2,000,000`). The decoder rejects it, measures the real rate from timestamps (`Enter FrameRate Guess Mode`, `in = 25000` for 25 fps) and paces the video plane by it.
-2. **Every frame queued to the decoder** is checked for headers repeated inside the video, which is how a quality switch brings in a new one. Those are rewritten in place.
-
-Details that keep it safe:
-- each rewritten header keeps its exact byte length, so frame sizes and the rest of the data never move. When `1 / 2,000,000` would change the length, it picks another absurd value that doesn't;
-- real rates (up to 120 fps) are left alone;
-- only the parameter headers at the start of each frame are read, never the picture data.
-
-Tested on 12 H.264 clips (baseline to high profile, 352×288 to 1920×1080, Spotify's own timing values): same size, identical decoded frames, new timing in place. On the TV it held through skips, autoplay and a mid-video quality switch, with the decoder rewriting the new header (`SPS timing 1/3050 -> 1/2000000`) and no new decoder.
-
-**Known limitation:** this fix depends on the decoder's own frame-rate estimate (guess mode), and that estimate isn't reliable. When a decoder starts while the TV is still at 60 Hz, for example right after coming back from the Home screen, it often settles on `in = 15000, out = 60000` instead of `in = 25000, out = 50000`. The video then stutters even though every frame is decoded, until a new decoder or a quality switch makes it estimate again. Placeholder-first never uses that estimate, and the same Home-and-back test plays smoothly with it.
-
-Run it with `./repatch.sh <tv-ip> --header-timing`. Placeholder-first stays the default.
+[`patches/frame-diag`](patches/frame-diag) logs once a second what Media3 did with the decoder's frames: how many, how late against the audio, how many it dropped. It changes nothing. Add `--diag` to any build and read it with `adb logcat -s FrameDiag`.
 
 ### ❌ What didn't work
 
@@ -228,10 +229,13 @@ brew install android-platform-tools apktool openjdk@21 && brew install --cask an
 
    The script:
    - pulls Spotify from the TV and verifies it's Spotify's signed build;
-   - applies the placeholder fix and signs the result with a key it creates in `local/`;
+   - keeps a copy of the official APKs in `local/original-<version>/`;
+   - applies the header-timing fix and signs the result with a key it creates in `local/`;
    - uninstalls the official app and installs the patched one.
 
-   For the header-timing fix, use `./repatch.sh <tv-ip> --header-timing`; for the fallback, `--textureview`. To build without touching the TV, add `--dry-run`.
+   For the fallbacks, use `--placeholder` or `--textureview`; add `--diag` for the frame logger. To build without touching the TV, add `--dry-run`.
+
+   Running it again while a patched build is installed (to switch fix or add `--diag`) reuses the kept official APKs and installs over the patched app, so you stay logged in.
 3. Open Spotify on the TV and log in again.
 
 ### Updating Spotify later
@@ -255,17 +259,17 @@ Uninstall the patched Spotify on the TV and install it from the Play Store.
 Watch the decoder choose its mode while you skip between videos:
 
 ```bash
-adb -s <tv-ip>:5555 logcat | grep -E "ConsumerUsage:|PlaceholderFirst|MSTAR_VDEC_DBG.*Rate"
+adb -s <tv-ip>:5555 logcat | grep -E "ConsumerUsage:|HeaderTiming|FrameRate Guess|MSTAR_VDEC_DBG.*Rate"
 ```
 
-With the fix, every new video logs `decoder configured on placeholder surface`, then `ConsumerUsage: 100, Hardware Render: 0` and `moved decoder to the real surface`.
+With the fix, every new video logs `HeaderTiming: SPS timing … -> u/120u`, then `ConsumerUsage: 900, Hardware Render: 1`, and never `Enter FrameRate Guess Mode`. `adb logcat | grep "force frame rate"` shows `in = 60000`.
 
 ## Compatibility
 
-| Spotify TV | Placeholder fix | TextureView fix |
-|---|---|---|
-| 9.1.94.1926 | ✅ tested on the TV | ✅ tested on the TV |
-| newer | should apply; the script stops with a clear error if the code changed | should apply |
+| Spotify TV | Header timing (default) | Placeholder fix | TextureView fix |
+|---|---|---|---|
+| 9.1.94.1926 | ✅ tested on the TV | ✅ tested on the TV | ✅ tested on the TV |
+| newer | should apply; the script stops with a clear error if the code changed | same | should apply |
 
 If you try another TV model or Spotify version, please open an issue with your model, firmware and result.
 
