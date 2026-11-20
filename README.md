@@ -276,7 +276,7 @@ With the fix, every new video logs `HeaderTiming: SPS timing … -> u/120u`, the
 | Spotify TV | Header timing (default) | Placeholder fix | TextureView fix |
 |---|---|---|---|
 | 9.1.94.1926 | ✅ tested on the TV | ✅ tested on the TV | ✅ tested on the TV |
-| 9.2.0.2053 | ✅ patches and installs (with `--aspect`); playback not yet verified | not tried | not tried |
+| 9.2.0.2053 | ✅ tested on the TV: We Are One (Pitbull) 1080p, 11 of 2,782 frames dropped, all at the first quality switch | not tried | not tried |
 | newer | should apply; the script stops with a clear error if the code changed | same | should apply |
 
 If you try another TV model or Spotify version, please open an issue with your model, firmware and result.

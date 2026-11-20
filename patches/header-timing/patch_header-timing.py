@@ -51,14 +51,21 @@ if factories:
     new_config = config.replace(call_line,
         f'    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n\n' + call_line, 1)
 else:
-    # Spotify 9.2: the configuration is built by a constructor; the format is complete once
-    # "allow-frame-drop" is set, the last key written before it is handed over
-    drop = one(re.findall(r'(    const-string (\w+), "allow-frame-drop"\n(?:(?!    invoke)[^\n]*\n)*'
-                          r'    invoke-virtual \{(\w+), \2, \w+\}, Landroid/media/MediaFormat;->setInteger\(Ljava/lang/String;I\)V\n)',
+    # Spotify 9.2: the configuration is built by a constructor. "allow-frame-drop" names the format
+    # register, but that key is set inside a branch TVs skip, so the hook goes right before the
+    # constructor, where every path meets.
+    drop = one(re.findall(r'    const-string (\w+), "allow-frame-drop"\n(?:(?!    invoke)[^\n]*\n)*'
+                          r'    invoke-virtual \{(\w+), \1, \w+\}, Landroid/media/MediaFormat;->setInteger\(Ljava/lang/String;I\)V\n',
                           config), 'allow-frame-drop setInteger')
-    fmt_reg = drop[2]
-    new_config = config.replace(drop[0],
-        drop[0] + f'\n    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n', 1)
+    fmt_reg = drop[1]
+    ret = re.search(r'\)(L[\w$/]+;)\n', config.split('\n', 1)[0] + '\n').group(1)
+    build = one(re.findall(r'\n(    new-instance \w+, ' + re.escape(ret) + r'\n)(?:(?!    new-instance)[\s\S])*?    return-object', config),
+                'configuration constructor')
+    after = config[config.index('"allow-frame-drop"'):]
+    if re.search(r'    (?:move|const|iget|invoke-static|move-result)[\w/-]* ' + fmt_reg + r'\b', after.split(build, 1)[0]):
+        sys.exit(f'Invariant failed: {fmt_reg} is overwritten before the configuration constructor')
+    new_config = config.replace(build,
+        f'    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n\n' + build, 1)
 src = src.replace(config, new_config, 1)
 
 # 2) samples: find onQueueInputBuffer and the sample-data field from the base renderer's feed method
