@@ -46,6 +46,8 @@ Other TVs built on the MStar/MediaTek `T615`/`MT58xx` TV platforms (several TCL,
 > - **9.x** (e.g. 9.1.94, ~19 MB): the native app, built on Media3. This is the one with the bug, and the one these patches fix.
 > - **1.x** (e.g. 1.134.2, ~5 MB, still updated in Nov 2026): Spotify's TV web app in a built-in browser. It doesn't have the bug and needs no patch. On the same TV it told the decoder the real rate (`force frame rate in = 24000`), decoded a steady 23–24 fps, sent video to the TV's video plane without the GPU (one `DEVICE` layer in SurfaceFlinger), and offered a quality picker, with no stretching.
 >
+> **Update, 20 Nov 2026:** 1.x isn't smooth at 1080p either. The web player's decoder runs in the TV's slow DIP mode (`ConsumerUsage: 100, Hardware Render: 0`), so heavy 1080p scenes decode at 21–23 fps with dips to 7 (We Are One, Pitbull). It looked smooth before only at a lower quality. The patched 9.x keeps the decoder in hardware-render mode and plays the same scenes on time.
+>
 > `adb shell dumpsys package com.spotify.tv.android | grep versionName` tells you which one you have. In November 2026 a fresh install from the Play Store on the 55C825 gave 1.134.2 again, a month after it gave 9.1.94.
 
 ## Symptoms
