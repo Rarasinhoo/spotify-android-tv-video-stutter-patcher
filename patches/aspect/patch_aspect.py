@@ -59,7 +59,15 @@ for f, s in files.items():
     files[f] = s.replace(fill_ref, f'{enum}->{fit}:{enum}')
     fill_sites.append((f.relative_to(root), s.count(fill_ref)))
 if not fill_sites:
-    sys.exit('Invariant failed: no code outside the view picks ASPECT_FILL')
+    # Spotify 9.2: callers switch the view to ASPECT_FILL through a setter on the view itself
+    # (load ASPECT_FILL, compare, store it in the mode field). The setter stores ASPECT_FIT instead.
+    vsrc = files[view_file]
+    setter = re.compile(rf'(\.method [^\n]*\n(?:(?!\.end method)[^\n]*\n)*?)    sget-object (v\d+), {re.escape(fill_ref)}\n'
+                        rf'((?:(?!\.end method)[^\n]*\n)*?    iput-object \2, p0, {re.escape(view)}->\w+:{re.escape(enum)}\n)')
+    found = setter.findall(vsrc)
+    one(found, 'view setter that stores ASPECT_FILL')
+    files[view_file] = setter.sub(lambda m: f'{m.group(1)}    sget-object {m.group(2)}, {enum}->{fit}:{enum}\n{m.group(3)}', vsrc, 1)
+    fill_sites.append((view_file.relative_to(root), 1))
 
 # Media3's VideoSize: a:I width, b:I height, c:F pixelWidthHeightRatio, built by <init>(IIF)V.
 vs_file = one([f for f, s in files.items()

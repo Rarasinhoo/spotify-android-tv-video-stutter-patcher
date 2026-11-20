@@ -37,17 +37,28 @@ S = re.escape(sup)
 
 # 1) setup: hand the MediaFormat to HeaderTiming right before the adapter configuration is built
 config = one([m for m in methods(src) if '"allow-frame-drop"' in m], 'codec configuration method')
-factory = one(re.findall(r'    invoke-static(/range)? \{([^}]*)\}, L[\w$/]+;->\w+\(L[\w$/]+;Landroid/media/MediaFormat;'
-                         r'L[\w$/]+;Landroid/view/Surface;Landroid/media/MediaCrypto;\)L[\w$/]+;\n', config),
-              'adapter configuration factory call')
-if factory[0]:
-    first = re.match(r'v(\d+) \.\. v\d+', factory[1]).group(1)
-    fmt_reg = f'v{int(first) + 1}'
+factories = re.findall(r'    invoke-static(/range)? \{([^}]*)\}, L[\w$/]+;->\w+\(L[\w$/]+;Landroid/media/MediaFormat;'
+                       r'L[\w$/]+;Landroid/view/Surface;Landroid/media/MediaCrypto;\)L[\w$/]+;\n', config)
+if factories:
+    # Media3 1.11 (Spotify 9.1): a static factory builds the configuration from the format
+    factory = one(factories, 'adapter configuration factory call')
+    if factory[0]:
+        first = re.match(r'v(\d+) \.\. v\d+', factory[1]).group(1)
+        fmt_reg = f'v{int(first) + 1}'
+    else:
+        fmt_reg = [r.strip() for r in factory[1].split(',')][1]
+    call_line = one(re.findall(r'    invoke-static(?:/range)? \{' + re.escape(factory[1]) + r'\}, [^\n]*\n', config), 'factory line')
+    new_config = config.replace(call_line,
+        f'    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n\n' + call_line, 1)
 else:
-    fmt_reg = [r.strip() for r in factory[1].split(',')][1]
-call_line = one(re.findall(r'    invoke-static(?:/range)? \{' + re.escape(factory[1]) + r'\}, [^\n]*\n', config), 'factory line')
-new_config = config.replace(call_line,
-    f'    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n\n' + call_line, 1)
+    # Spotify 9.2: the configuration is built by a constructor; the format is complete once
+    # "allow-frame-drop" is set, the last key written before it is handed over
+    drop = one(re.findall(r'(    const-string (\w+), "allow-frame-drop"\n(?:(?!    invoke)[^\n]*\n)*'
+                          r'    invoke-virtual \{(\w+), \2, \w+\}, Landroid/media/MediaFormat;->setInteger\(Ljava/lang/String;I\)V\n)',
+                          config), 'allow-frame-drop setInteger')
+    fmt_reg = drop[2]
+    new_config = config.replace(drop[0],
+        drop[0] + f'\n    invoke-static {{{fmt_reg}}}, LHeaderTiming;->onFormat(Landroid/media/MediaFormat;)V\n', 1)
 src = src.replace(config, new_config, 1)
 
 # 2) samples: find onQueueInputBuffer and the sample-data field from the base renderer's feed method
@@ -57,7 +68,10 @@ feed = one([m for m in methods(base) if re.search(r'invoke-interface(?:/range)? 
 q = one(re.findall(r'invoke-virtual \{(\w+), (\w+)\}, ' + S + r'->(\w+)\((L[\w$/]+;)\)V\s+'
                    r'invoke-virtual \{\1, \2\}, ' + S + r'->\w+\(\4\)I', feed), 'onQueueInputBuffer call')
 on_queue, buf = q[2], q[3]
-data = one(re.findall(re.escape(buf) + r'->(\w+):Ljava/nio/ByteBuffer;\s+invoke-static \{\w+\}, L[\w$/]+;->\w+\(Ljava/lang/Object;\)V'
+# the null check before limit() is a static helper in 9.1 and getClass() in 9.2
+data = one(re.findall(re.escape(buf) + r'->(\w+):Ljava/nio/ByteBuffer;\s+'
+                      r'(?:invoke-static \{\w+\}, L[\w$/]+;->\w+\(Ljava/lang/Object;\)V'
+                      r'|invoke-virtual \{\w+\}, Ljava/lang/Object;->getClass\(\)Ljava/lang/Class;)'
                       r'\s+invoke-virtual \{\w+\}, Ljava/nio/Buffer;->limit\(\)I', feed), 'sample data field')
 
 override = one([m for m in methods(src) if re.match(r'\.method [^\n]*\b' + on_queue + re.escape(f'({buf})V') + r'\n', m)],

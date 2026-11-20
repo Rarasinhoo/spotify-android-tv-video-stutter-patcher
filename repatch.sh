@@ -42,7 +42,7 @@ BT=$(ls -d "${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"/build
 KEYSTORE=${KEYSTORE:-$HERE/local/patch.keystore}
 if [ ! -f "$KEYSTORE" ]; then
   mkdir -p "$(dirname "$KEYSTORE")"
-  KEYSTORE_PASS=${KEYSTORE_PASS:-$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)}
+  KEYSTORE_PASS=${KEYSTORE_PASS:-$(openssl rand -hex 12)}
   keytool -genkeypair -keystore "$KEYSTORE" -alias patch -keyalg RSA -keysize 2048 -validity 10000 \
     -storepass "$KEYSTORE_PASS" -keypass "$KEYSTORE_PASS" -dname "CN=Local Spotify TV patch" >/dev/null 2>&1
   printf '%s' "$KEYSTORE_PASS" > "$KEYSTORE.pass"
@@ -85,7 +85,17 @@ apktool d -r -f -o "$W/src" "$W/orig/base.apk" >/dev/null
 python3 -I "$HERE/patches/$MODE/patch_$MODE.py" "$W/src"
 if [ $ASPECT = 1 ]; then python3 -I "$HERE/patches/aspect/patch_aspect.py" "$W/src"; fi
 if [ $DIAG = 1 ]; then python3 -I "$HERE/patches/frame-diag/patch_frame-diag.py" "$W/src"; fi
-apktool b -o "$W/base-unsigned.apk" "$W/src" >/dev/null
+# A dex holds at most 65,536 method/field references; our hooks can push a full one over. Then move
+# half of its top-level classes into a new dex (Android 8.1+ loads classes from any dex) and retry.
+for attempt in 1 2 3 4; do
+  if apktool b -o "$W/base-unsigned.apk" "$W/src" >"$W/build.log" 2>&1; then break; fi
+  FULL=$(grep -m1 -oE 'Could not smali folder: smali[_a-z0-9]*' "$W/build.log" | awk '{print $NF}')
+  if [ -z "$FULL" ] || ! grep -q 'out of range' "$W/build.log" || [ $attempt = 4 ]; then cat "$W/build.log"; exit 1; fi
+  N=$(ls -d "$W"/src/smali_classes* | sed 's/.*smali_classes//' | sort -n | tail -1)
+  NEW="$W/src/smali_classes$((N + 1))"; mkdir -p "$NEW"
+  ls "$W/src/$FULL"/*.smali | awk 'NR % 2 == 0' | while read -r f; do mv "$f" "$NEW/"; done
+  echo "$FULL was over the dex reference limit: moved half its top-level classes to $(basename "$NEW")"
+done
 
 mkdir -p "$W/out"
 "$BT/zipalign" -f -p 4 "$W/base-unsigned.apk" "$W/a-base.apk"
